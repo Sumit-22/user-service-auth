@@ -30,6 +30,18 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      # Keep these short: cache errors fall back to the DB, so a slow Redis must not stall requests.
+      timeout: ${REDIS_TIMEOUT:500ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:500ms}
+
+  cache:
+    type: redis
+
+app:
+  cache:
+    key-prefix: ${CACHE_KEY_PREFIX:user-service:v1:}
+    user-ttl: ${CACHE_USER_TTL:10m}
 
 security:
   jwt:
