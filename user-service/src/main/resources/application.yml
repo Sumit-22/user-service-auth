@@ -1,5 +1,10 @@
 server:
   port: 8080
+  # Client IP for rate limiting. "native" = Tomcat RemoteIpValve: X-Forwarded-For is honoured only when the
+  # direct peer is a trusted proxy (default: private ranges 10/8, 172.16/12, 192.168/16, 127/8, ...).
+  # A client connecting directly from a public IP cannot spoof it. If your load balancer sits on another
+  # range, set SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES to a regex matching its IPs.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:native}
 
 spring:
   application:
@@ -42,6 +47,19 @@ app:
   cache:
     key-prefix: ${CACHE_KEY_PREFIX:user-service:v1:}
     user-ttl: ${CACHE_USER_TTL:10m}
+
+  # Token-bucket policies: up to `capacity` requests in a burst, refilled by `refill-tokens`
+  # every `refill-period`. on-redis-failure: local (default, per-instance in-memory limits) | allow | deny (503).
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    key-prefix: ${RATE_LIMIT_KEY_PREFIX:user-service:rl:}
+    policies:
+      login-ip:       { capacity: 20,  refill-tokens: 20,  refill-period: 1m }   # all login attempts per IP
+      login-email-ip: { capacity: 5,   refill-tokens: 5,   refill-period: 15m }  # failed logins per account+IP
+      login-email:    { capacity: 50,  refill-tokens: 50,  refill-period: 1h }   # failed logins per account
+      register-ip:    { capacity: 5,   refill-tokens: 5,   refill-period: 1h }
+      token-ip:       { capacity: 30,  refill-tokens: 30,  refill-period: 1m }
+      user-api:       { capacity: 100, refill-tokens: 100, refill-period: 1m }
 
 security:
   jwt:

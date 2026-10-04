@@ -1,3 +1,5 @@
+# Infrastructure only (run the app from your IDE / mvn):   docker compose up -d
+# Full stack (infrastructure + app container):             docker compose --profile app up -d --build
 services:
   postgres:
     image: postgres:17
@@ -28,6 +30,25 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  app:
+    profiles: ["app"]
+    build: .
+    container_name: user-service-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/users
+      REDIS_HOST: redis
+      JWT_PRIVATE_KEY: /app/keys/private.pem
+      JWT_PUBLIC_KEY: /app/keys/public.pem
+    volumes:
+      - ./keys:/app/keys:ro
+    ports:
+      - "8080:8080"
 
 volumes:
   postgres_data:

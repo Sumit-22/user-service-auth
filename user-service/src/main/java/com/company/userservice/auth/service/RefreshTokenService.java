@@ -43,7 +43,7 @@ public class RefreshTokenService {
             throw new ApiException(HttpStatus.UNAUTHORIZED,"Refresh token expired or revoked");
 
         old.setRevoked(true);
-        String next=randomToken();
+        String next=create(old.getUser());
         old.setReplacedByHash(hash(next));
         repo.save(old);
 
