@@ -19,7 +19,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\test-api.ps1"
 The script checks the health, OpenAPI, and Swagger UI routes; exercises all six
 application API routes; and checks authentication, refresh-token rotation,
 logout, rejected credentials, invalid registration data, and duplicate
-registration. It registers a uniquely named disposable user on each run. The
+registration. When the `user-service-redis` container is reachable through
+`docker`, it also verifies the Redis profile cache, the rate-limit headers and
+the failed-login lockout (`429` + `Retry-After`), and clears rate-limit buckets
+before running so reruns are not throttled. Pass `-SkipRedisChecks` to skip this. It registers a uniquely named disposable user on each run. The
 service has no user-delete endpoint, so that account remains in the local
 database.
 
@@ -133,6 +136,20 @@ curl -i -X POST "$BASE_URL/api/v1/auth/logout" \
 ```
 
 Expected: `204 No Content`. Refreshing with the logged-out token returns `401`.
+
+### Rate limiting
+
+```bash
+for i in 1 2 3 4 5 6; do
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST "$BASE_URL/api/v1/auth/login" \
+    -H "Content-Type: application/json" \
+    -d '{"email":"victim@example.com","password":"WrongPassword123!"}'
+done
+```
+
+Expected: five `401` responses, then `429 Too Many Requests` with a
+`Retry-After` header. Successful responses carry `X-RateLimit-Limit` and
+`X-RateLimit-Remaining` headers.
 
 ## Routes covered
 

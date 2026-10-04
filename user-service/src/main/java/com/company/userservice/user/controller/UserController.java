@@ -1,5 +1,7 @@
 package com.company.userservice.user.controller;
 
+import com.company.userservice.ratelimit.RateLimit;
+import com.company.userservice.ratelimit.RateLimitPolicies;
 import com.company.userservice.user.dto.UserResponse;
 import com.company.userservice.user.service.UserService;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -9,6 +11,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/users")
+@RateLimit(policy=RateLimitPolicies.USER_API, key=RateLimit.KeyType.USER)
 public class UserController {
     private final UserService service;
     public UserController(UserService service){this.service=service;}
