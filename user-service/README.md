@@ -9,11 +9,21 @@ Java 21, Spring Boot 3.5, Spring Security, PostgreSQL, Redis, Flyway, JWT/RS256,
    `openssl genrsa -out keys/private.pem 3072`
    `openssl rsa -in keys/private.pem -pubout -out keys/public.pem`
 
-2. Start infrastructure:
-   `docker compose up -d`
+2. Start everything (Postgres, Redis, app):
+   `docker compose --profile app up -d --build`
 
-3. Run:
-   `mvn spring-boot:run`
+3. Test:
+   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-api.ps1`
+
+See [RUNNING.md](./RUNNING.md) for the full guide: running from Maven/IDE, all test suites,
+Redis inspection, outage drill, configuration and rate-limit policies, and troubleshooting.
+
+## Redis usage
+
+- **Caching:** user profiles (`GET /users/me`, `GET /users/{id}`) are cached as JSON with a TTL.
+- **Rate limiting:** distributed token buckets (atomic Lua script) on all auth and user endpoints;
+  failed logins are limited per account+IP and per account.
+- Both degrade gracefully if Redis is down (DB reads, in-memory limits).
 
 ## APIs
 
@@ -43,9 +53,9 @@ Access token is short-lived. Refresh token is opaque, hashed at rest and rotated
 
 - Put private key in Vault/KMS/HSM rather than a filesystem.
 - Put access/refresh tokens behind HTTPS only.
-- Add gateway-level rate limiting and login-specific throttling.
+- Add gateway-level rate limiting in front of the in-service limits.
 - Add email verification and password reset with one-time hashed tokens.
-- Add account lockout/backoff and audit events.
+- Add audit events for logins and lockouts.
 - Add CORS allowlist rather than permissive defaults.
-- Add Redis-backed distributed rate limiting/session metadata.
+- Add a circuit breaker around Redis so an outage skips the timeout instead of waiting for it.
 - Consider external OIDC authorization server (Keycloak/Okta/Auth0/etc.) at larger scale.
