@@ -21,7 +21,8 @@ public class UserController {
         return service.get(UUID.fromString(auth.getToken().getSubject()));
     }
 
-    @PreAuthorize("hasAuthority('USER_READ')")
+    // Own profile, or any profile with USER_READ (ADMIN). authentication.name is the JWT `sub` (user UUID).
+    @PreAuthorize("hasAuthority('USER_READ') or #id.toString() == authentication.name")
     @GetMapping("/{id}")
     public UserResponse get(@PathVariable UUID id){return service.get(id);}
 }

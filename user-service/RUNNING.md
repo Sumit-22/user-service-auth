@@ -95,7 +95,7 @@ flowchart LR
 | Concern | Decision | Why |
 |---|---|---|
 | Session model | Stateless **JWT access tokens** (RS256, 15 min) | Any instance or downstream service verifies with the public key only, with no DB or network hop |
-| Long-lived sessions | Opaque **refresh tokens** (30 days), stored as SHA-256 hashes, rotated on every use | A DB leak exposes no usable tokens; rotation limits how long a stolen token is useful |
+| Long-lived sessions | Opaque **refresh tokens** (30 days), stored as SHA-256 hashes, rotated on every use; replaying a rotated token revokes all of the user's tokens | A DB leak exposes no usable tokens; rotation plus reuse detection limits how long a stolen token is useful |
 | Passwords | **Argon2** | Memory-hard, so GPU cracking is resistant |
 | Authorization | RBAC: user → roles → permissions, embedded as JWT claims | No per-request permission lookup |
 | Source of truth | **PostgreSQL**, schema via Flyway migrations | Transactions, constraints, versioned schema |
@@ -320,7 +320,6 @@ erDiagram
         varchar last_name
         boolean enabled
         boolean email_verified
-        int failed_login_attempts
         timestamptz created_at
         timestamptz updated_at
     }
@@ -346,12 +345,15 @@ erDiagram
         varchar token_hash UK "SHA-256 of raw token"
         timestamptz expires_at "indexed"
         boolean revoked
-        varchar replaced_by_hash "rotation chain"
+        varchar replaced_by_hash "rotation chain, reuse detection"
         timestamptz created_at
     }
 ```
 
-Seed data (Flyway `V2`): `USER` → `USER_READ`; `ADMIN` → all permissions. New registrations get `USER`.
+Seed data (Flyway `V2`, adjusted by `V3`): `ADMIN` → all permissions; `USER` → no permissions (`V3` removed
+`USER_READ`, so a regular user can read only their own profile via `/users/me` or `/users/{own id}`). New
+registrations get `USER`. `V3` also drops the unused `users.failed_login_attempts` column (failed logins are
+throttled by the rate limiter).
 
 ### L5. Sequence: register
 
@@ -472,9 +474,16 @@ sequenceDiagram
     C->>A: POST /auth/refresh {refreshToken}
     Note over C,A: token-ip rate limit applied first
     A->>T: rotate(raw)
-    T->>DB: find by sha256(raw)
-    alt not found, revoked or expired
+    T->>DB: SELECT ... WHERE token_hash = sha256(raw) FOR UPDATE
+    Note over T,DB: row lock: a concurrent refresh or logout<br/>of the same token waits, then sees revoked = true
+    alt not found or expired
         T-->>C: 401
+    else revoked and replaced_by_hash set (reuse of a rotated token)
+        T->>DB: UPDATE refresh_tokens SET revoked = true<br/>WHERE user_id = ? AND NOT revoked
+        Note over T: WARN log: user id + count.<br/>Committed despite the 401 (noRollbackFor)
+        T-->>C: 401
+    else revoked by logout (replaced_by_hash null)
+        T-->>C: 401, other sessions untouched
     end
     T->>DB: mark old revoked, replaced_by_hash = sha256(new)
     T->>DB: INSERT new refresh token row, expires +30d
@@ -482,10 +491,10 @@ sequenceDiagram
 
     C->>A: POST /auth/logout {refreshToken}
     A->>T: revoke(raw)
-    T->>DB: set revoked = true if found
+    T->>DB: SELECT ... FOR UPDATE, set revoked = true if found
     A-->>C: 204
 
-    Note over T,DB: RefreshTokenCleanupJob, hourly:<br/>DELETE expired or revoked tokens
+    Note over T,DB: RefreshTokenCleanupJob, hourly:<br/>DELETE expired tokens only (revoked rows are<br/>kept until expiry as evidence for reuse detection)
 ```
 
 ### L9. Algorithm: token bucket (`token_bucket.lua`, atomic in Redis)
@@ -612,7 +621,7 @@ Flyway creates the schema and seeds the `USER`/`ADMIN` roles automatically on fi
 mvn test
 ```
 
-23 tests: refresh-token rotation, cache serialization, rate-limit interceptor, Redis-outage fallbacks, and the Lua token bucket
+28 tests: refresh-token rotation and reuse detection, error handling (403/429), cache serialization, rate-limit interceptor, Redis-outage fallbacks, and the Lua token bucket
 against a real Redis (via Testcontainers). The Redis-container tests are **skipped automatically** if
 Docker isn't running, so make sure it is.
 
@@ -622,12 +631,13 @@ Docker isn't running, so make sure it is.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-api.ps1
 ```
 
-Expected last line: `Summary: 35 passed, 0 failed, 35 total.` It covers:
+Expected last line: `Summary: 38 passed, 0 failed, 38 total.` It covers:
 
 - health, OpenAPI, Swagger UI
 - register (valid / invalid 400 / duplicate 409), login, wrong password 401
-- `/users/me`, `/users/{id}`, missing token 401
-- refresh-token rotation (twice in a row), old token rejected, logout
+- `/users/me`, `/users/{id}` (own profile 200, another user's profile 403), missing token 401
+- refresh-token rotation (R1 → R2 → R3), logout of R3 and R3 rejected, then replaying R1 → 401 and the
+  login session's refresh token is revoked too (reuse detection)
 - **Redis cache:** profile is stored under `user-service:v1:users::<id>` with a TTL
 - **Rate limiting:** headers present; 5 failed logins → 6th gets `429` + `Retry-After`;
   the blocked account doesn't affect other users on the same IP
@@ -697,6 +707,7 @@ All settings are in `src/main/resources/application.yml` and can be overridden w
 | `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` | private ranges | regex of proxy IPs trusted to send `X-Forwarded-For` |
 | `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` | `keys/*.pem` | file path or PEM content |
 | `JWT_ACCESS_SECONDS` / `JWT_REFRESH_DAYS` | `900` / `30` | token lifetimes |
+| `CORS_ALLOWED_ORIGINS` | empty | comma-separated browser origins allowed to call `/api/**` (empty = no cross-origin access) |
 
 ### Rate-limit policies
 

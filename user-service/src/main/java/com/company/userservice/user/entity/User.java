@@ -30,9 +30,6 @@ public class User {
     private boolean emailVerified = false;
 
     @Column(nullable=false)
-    private int failedLoginAttempts = 0;
-
-    @Column(nullable=false)
     private Instant createdAt;
 
     @Column(nullable=false)
@@ -67,8 +64,6 @@ public class User {
     public void setEnabled(boolean v){ enabled=v; }
     public boolean isEmailVerified(){ return emailVerified; }
     public void setEmailVerified(boolean v){ emailVerified=v; }
-    public int getFailedLoginAttempts(){ return failedLoginAttempts; }
-    public void setFailedLoginAttempts(int v){ failedLoginAttempts=v; }
     public Instant getCreatedAt(){ return createdAt; }
     public Instant getUpdatedAt(){ return updatedAt; }
     public Set<Role> getRoles(){ return roles; }

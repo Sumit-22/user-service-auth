@@ -109,7 +109,9 @@ curl -i "$BASE_URL/api/v1/users/$USER_ID" \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
-Expected: `200 OK` for a token with `USER_READ` permission.
+Expected: `200 OK` for your own ID, or for any ID with a token that has the
+`USER_READ` permission (ADMIN). A regular user requesting another user's ID
+gets `403 Forbidden`.
 
 ### Refresh tokens
 
@@ -125,7 +127,8 @@ REFRESH_TOKEN=$(printf '%s' "$REFRESH_RESPONSE" | jq -r .refreshToken)
 ```
 
 Expected: `200 OK` with a new access token and a rotated refresh token. Reusing
-the previous refresh token returns `401`.
+the previous refresh token returns `401` and is treated as token theft: every
+refresh token of that user is revoked, so all their sessions must log in again.
 
 ### Logout
 
@@ -135,7 +138,8 @@ curl -i -X POST "$BASE_URL/api/v1/auth/logout" \
   -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}"
 ```
 
-Expected: `204 No Content`. Refreshing with the logged-out token returns `401`.
+Expected: `204 No Content`. Refreshing with the logged-out token returns `401`
+(other sessions of the user are not affected).
 
 ### Rate limiting
 
@@ -163,4 +167,4 @@ Expected: five `401` responses, then `429 Too Many Requests` with a
 | POST | `/api/v1/auth/refresh` | 200 |
 | POST | `/api/v1/auth/logout` | 204 |
 | GET | `/api/v1/users/me` | 200 with bearer token |
-| GET | `/api/v1/users/{id}` | 200 with bearer token and `USER_READ` |
+| GET | `/api/v1/users/{id}` | 200 for own profile, or any user with `USER_READ` (ADMIN); another user's ID returns 403 |

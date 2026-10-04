@@ -44,6 +44,11 @@ spring:
     type: redis
 
 app:
+  cors:
+    # Comma-separated browser origins allowed to call /api/** (e.g. https://app.example.com).
+    # Empty (default) = no cross-origin access.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
   cache:
     key-prefix: ${CACHE_KEY_PREFIX:user-service:v1:}
     user-ttl: ${CACHE_USER_TTL:10m}

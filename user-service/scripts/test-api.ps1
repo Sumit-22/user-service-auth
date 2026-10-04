@@ -287,13 +287,31 @@ try {
             }
 
             if ($me.Json.id) {
-                $byId = Invoke-Check -Name "GET /api/v1/users/{id} (USER_READ)" `
+                $byId = Invoke-Check -Name "GET /api/v1/users/{id} (own profile)" `
                     -Method "GET" -Path "/api/v1/users/$($me.Json.id)" `
                     -ExpectedStatus 200 -BearerToken $accessToken
                 if ($byId -and $byId.Json) {
                     Assert-Condition -Name "Get-by-ID returns the requested user" `
                         -Condition ($byId.Json.id -eq $me.Json.id) `
                         -Detail "id=$($byId.Json.id)"
+                }
+
+                # A regular user (no USER_READ) must not read someone else's profile by ID.
+                $otherRegister = Invoke-Check -Name "POST /api/v1/auth/register (second user)" `
+                    -Method "POST" -Path "/api/v1/auth/register" -ExpectedStatus 201 -Body @{
+                        email = "api-smoke-$([Guid]::NewGuid().ToString('N'))@example.com"
+                        password = $password
+                        firstName = "API"
+                        lastName = "SmokeTestOther"
+                    }
+                if ($otherRegister -and $otherRegister.Json -and $otherRegister.Json.accessToken) {
+                    Invoke-Check -Name "GET /api/v1/users/{id} (another user's profile returns 403)" `
+                        -Method "GET" -Path "/api/v1/users/$($me.Json.id)" `
+                        -ExpectedStatus 403 -BearerToken $otherRegister.Json.accessToken | Out-Null
+                }
+                else {
+                    Add-Skipped -Name "GET /api/v1/users/{id} (another user's profile returns 403)" `
+                        -Reason "second registration did not return an access token"
                 }
             }
             else {
@@ -313,7 +331,9 @@ try {
             email = $email
             password = $password
         }
+    $loginRefreshToken = $null
     if ($login -and $login.Json) {
+        $loginRefreshToken = $login.Json.refreshToken
         Assert-Condition -Name "Login returns an access token" `
             -Condition ([bool]$login.Json.accessToken) `
             -Detail "accessToken is required"
@@ -353,43 +373,60 @@ try {
             password = $password
         } | Out-Null
 
+    # Refresh flow: R1 -> R2 -> R3, logout R3, then replay R1. Reusing an already-rotated token is treated as
+    # theft and revokes every session of the user, so this must run last and the old-token replay must come
+    # after the rotations it would otherwise invalidate.
     if ($refreshToken) {
-        $refresh = Invoke-Check -Name "POST /api/v1/auth/refresh" -Method "POST" `
+        $r1 = $refreshToken
+        $refresh = Invoke-Check -Name "POST /api/v1/auth/refresh (R1 -> R2)" -Method "POST" `
             -Path "/api/v1/auth/refresh" -ExpectedStatus 200 -Body @{
-                refreshToken = $refreshToken
+                refreshToken = $r1
             }
-        if ($refresh -and $refresh.Json) {
-            $rotatedRefreshToken = $refresh.Json.refreshToken
-            Assert-Condition -Name "Refresh rotates the refresh token" `
-                -Condition ([bool]$rotatedRefreshToken -and $rotatedRefreshToken -ne $refreshToken) `
-                -Detail "refresh response must contain a different refreshToken"
+        $r2 = $null
+        if ($refresh -and $refresh.Json) { $r2 = $refresh.Json.refreshToken }
+        Assert-Condition -Name "Refresh rotates the refresh token" `
+            -Condition ([bool]$r2 -and $r2 -ne $r1) `
+            -Detail "refresh response must contain a different refreshToken"
 
-            Invoke-Check -Name "POST /api/v1/auth/refresh (old token rejected)" `
+        $r3 = $null
+        if ($r2) {
+            $secondRefresh = Invoke-Check -Name "POST /api/v1/auth/refresh (R2 -> R3, rotated token works for next refresh)" `
+                -Method "POST" -Path "/api/v1/auth/refresh" -ExpectedStatus 200 -Body @{
+                    refreshToken = $r2
+                }
+            if ($secondRefresh -and $secondRefresh.Json) { $r3 = $secondRefresh.Json.refreshToken }
+        }
+
+        if ($r3) {
+            $logout = Invoke-Check -Name "POST /api/v1/auth/logout (R3)" -Method "POST" `
+                -Path "/api/v1/auth/logout" -ExpectedStatus 204 -Body @{
+                    refreshToken = $r3
+                }
+
+            if ($logout -and $logout.StatusCode -eq 204) {
+                Invoke-Check -Name "POST /api/v1/auth/refresh (logged-out R3 rejected)" `
+                    -Method "POST" -Path "/api/v1/auth/refresh" -ExpectedStatus 401 -Body @{
+                        refreshToken = $r3
+                    } | Out-Null
+            }
+        }
+        else {
+            Add-Skipped -Name "Logout" -Reason "second refresh did not return a refresh token"
+        }
+
+        Invoke-Check -Name "POST /api/v1/auth/refresh (replayed R1 rejected as reuse)" `
+            -Method "POST" -Path "/api/v1/auth/refresh" -ExpectedStatus 401 -Body @{
+                refreshToken = $r1
+            } | Out-Null
+
+        if ($loginRefreshToken) {
+            Invoke-Check -Name "POST /api/v1/auth/refresh (reuse revoked the login session too)" `
                 -Method "POST" -Path "/api/v1/auth/refresh" -ExpectedStatus 401 -Body @{
-                    refreshToken = $refreshToken
+                    refreshToken = $loginRefreshToken
                 } | Out-Null
-
-            if ($rotatedRefreshToken) {
-                $secondRefresh = Invoke-Check -Name "POST /api/v1/auth/refresh (rotated token works for next refresh)" `
-                    -Method "POST" -Path "/api/v1/auth/refresh" -ExpectedStatus 200 -Body @{
-                        refreshToken = $rotatedRefreshToken
-                    }
-                if ($secondRefresh -and $secondRefresh.Json -and $secondRefresh.Json.refreshToken) {
-                    $rotatedRefreshToken = $secondRefresh.Json.refreshToken
-                }
-
-                $logout = Invoke-Check -Name "POST /api/v1/auth/logout" -Method "POST" `
-                    -Path "/api/v1/auth/logout" -ExpectedStatus 204 -Body @{
-                        refreshToken = $rotatedRefreshToken
-                    }
-
-                if ($logout -and $logout.StatusCode -eq 204) {
-                    Invoke-Check -Name "POST /api/v1/auth/refresh (logged-out token rejected)" `
-                        -Method "POST" -Path "/api/v1/auth/refresh" -ExpectedStatus 401 -Body @{
-                            refreshToken = $rotatedRefreshToken
-                        } | Out-Null
-                }
-            }
+        }
+        else {
+            Add-Skipped -Name "Reuse revokes all sessions" -Reason "login did not return a refresh token"
         }
     }
     else {

@@ -32,7 +32,7 @@ POST /api/v1/auth/login
 POST /api/v1/auth/refresh
 POST /api/v1/auth/logout
 GET  /api/v1/users/me
-GET  /api/v1/users/{id}   (USER_READ)
+GET  /api/v1/users/{id}   (own profile, or any user with USER_READ (ADMIN); another user's ID returns 403)
 
 Swagger UI is available at `http://localhost:8080/swagger-ui/index.html`.
 See [API-CURL-AND-TESTING.md](./API-CURL-AND-TESTING.md) for cURL examples and
@@ -48,6 +48,7 @@ the PowerShell API smoke-test command.
 }
 
 Access token is short-lived. Refresh token is opaque, hashed at rest and rotated on use.
+Replaying an already-rotated refresh token is treated as theft: every refresh token of that user is revoked.
 
 ## Production hardening
 
@@ -56,6 +57,6 @@ Access token is short-lived. Refresh token is opaque, hashed at rest and rotated
 - Add gateway-level rate limiting in front of the in-service limits.
 - Add email verification and password reset with one-time hashed tokens.
 - Add audit events for logins and lockouts.
-- Add CORS allowlist rather than permissive defaults.
+- Set `CORS_ALLOWED_ORIGINS` to your front-end origins (empty by default: no cross-origin access).
 - Add a circuit breaker around Redis so an outage skips the timeout instead of waiting for it.
 - Consider external OIDC authorization server (Keycloak/Okta/Auth0/etc.) at larger scale.

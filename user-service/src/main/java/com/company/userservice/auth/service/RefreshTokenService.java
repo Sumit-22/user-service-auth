@@ -4,6 +4,8 @@ import com.company.userservice.auth.entity.RefreshToken;
 import com.company.userservice.auth.repository.RefreshTokenRepository;
 import com.company.userservice.common.exception.ApiException;
 import com.company.userservice.user.entity.User;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,7 @@ import java.util.*;
 
 @Service
 public class RefreshTokenService {
+    private static final Logger log=LoggerFactory.getLogger(RefreshTokenService.class);
     private final RefreshTokenRepository repo;
     private final long ttlDays;
     private final SecureRandom random=new SecureRandom();
@@ -35,11 +38,22 @@ public class RefreshTokenService {
         return raw;
     }
 
-    @Transactional
+    // noRollbackFor: the revocation on reuse must be committed even though the request fails with 401.
+    @Transactional(noRollbackFor=ApiException.class)
     public Rotation rotate(String raw) {
-        RefreshToken old=repo.findByTokenHash(hash(raw))
+        RefreshToken old=repo.findByTokenHashForUpdate(hash(raw))
             .orElseThrow(()->new ApiException(HttpStatus.UNAUTHORIZED,"Invalid refresh token"));
-        if(old.isRevoked() || old.getExpiresAt().isBefore(Instant.now()))
+        if(old.isRevoked()) {
+            // Already rotated: either the legitimate client or an attacker holds a stolen copy. We cannot tell
+            // which, so end every session of the user. A token revoked by logout has no successor.
+            if(old.getReplacedByHash()!=null) {
+                UUID userId=old.getUser().getId();
+                int revoked=revokeAll(userId);
+                log.warn("Refresh token reuse detected for user {}; revoked {} refresh token(s)", userId, revoked);
+            }
+            throw new ApiException(HttpStatus.UNAUTHORIZED,"Refresh token expired or revoked");
+        }
+        if(old.getExpiresAt().isBefore(Instant.now()))
             throw new ApiException(HttpStatus.UNAUTHORIZED,"Refresh token expired or revoked");
 
         old.setRevoked(true);
@@ -52,11 +66,12 @@ public class RefreshTokenService {
 
     @Transactional
     public void revoke(String raw) {
-        repo.findByTokenHash(hash(raw)).ifPresent(t->{t.setRevoked(true);repo.save(t);});
+        // Locked so a logout racing a refresh cannot overwrite the refresh's replaced_by_hash with null.
+        repo.findByTokenHashForUpdate(hash(raw)).ifPresent(t->{t.setRevoked(true);repo.save(t);});
     }
 
     @Transactional
-    public void revokeAll(UUID userId){ repo.revokeAllForUser(userId); }
+    public int revokeAll(UUID userId){ return repo.revokeAllForUser(userId); }
 
     public String hash(String value) {
         try {

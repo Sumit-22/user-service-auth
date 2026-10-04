@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
@@ -40,6 +41,13 @@ public class GlobalExceptionHandler {
         String msg=e.getBindingResult().getFieldErrors().stream()
             .map(x -> x.getField()+": "+x.getDefaultMessage()).collect(Collectors.joining(", "));
         return build(HttpStatus.BAD_REQUEST,msg,r);
+    }
+
+    // Method-security (@PreAuthorize) denials are thrown inside the controller, so without this they would
+    // fall through to the catch-all below as 500 instead of reaching Spring Security's 403 handling.
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<ErrorResponse> accessDenied(AccessDeniedException e, HttpServletRequest r) {
+        return build(HttpStatus.FORBIDDEN,"Access denied",r);
     }
 
     @ExceptionHandler(Exception.class)

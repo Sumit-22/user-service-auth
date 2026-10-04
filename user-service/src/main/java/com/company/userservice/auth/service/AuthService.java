@@ -6,6 +6,7 @@ import com.company.userservice.ratelimit.RateLimitPolicies;
 import com.company.userservice.ratelimit.RedisRateLimiter;
 import com.company.userservice.user.entity.*;
 import com.company.userservice.user.repository.*;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.*;
 import org.springframework.security.core.AuthenticationException;
@@ -42,7 +43,13 @@ public class AuthService {
         u.setFirstName(req.firstName().trim());
         u.setLastName(req.lastName().trim());
         u.getRoles().add(role);
-        users.save(u);
+        // The exists-check above is only a fast path: a concurrent registration can still win the race,
+        // so flush now to hit the unique constraint here instead of at commit (which would surface as 500).
+        try {
+            users.saveAndFlush(u);
+        } catch (DataIntegrityViolationException e) {
+            throw new ApiException(HttpStatus.CONFLICT,"Email already registered");
+        }
         return tokens(u);
     }
 
@@ -66,11 +73,13 @@ public class AuthService {
         }
         // Not resetting the per-account bucket: a victim's successful login must not hand attackers a fresh budget.
         rateLimiter.reset(RateLimitPolicies.LOGIN_EMAIL_IP, emailAndIp);
-        User u=users.findSecurityUser(req.email()).orElseThrow();
+        User u=users.findSecurityUser(email).orElseThrow();
         return tokens(u);
     }
 
-    @Transactional
+    // Outer transaction for rotate(): it must not roll back on ApiException either, or the
+    // revoke-all on refresh-token reuse would be undone together with the 401.
+    @Transactional(noRollbackFor=ApiException.class)
     public TokenResponse refresh(RefreshRequest req) {
         RefreshTokenService.Rotation rotation=refresh.rotate(req.refreshToken());
         return new TokenResponse(jwt.createAccessToken(rotation.user()),rotation.refreshToken(),

@@ -13,5 +13,5 @@ public class RefreshTokenCleanupJob {
 
     @Scheduled(cron="0 0 * * * *")
     @Transactional
-    public void cleanup(){ repo.deleteExpiredOrRevoked(Instant.now()); }
+    public void cleanup(){ repo.deleteExpired(Instant.now()); }
 }
