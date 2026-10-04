@@ -621,8 +621,11 @@ Flyway creates the schema and seeds the `USER`/`ADMIN` roles automatically on fi
 mvn test
 ```
 
-28 tests: refresh-token rotation and reuse detection, error handling (403/429), cache serialization, rate-limit interceptor, Redis-outage fallbacks, and the Lua token bucket
-against a real Redis (via Testcontainers). The Redis-container tests are **skipped automatically** if
+34 tests: refresh-token rotation and reuse detection, error handling (403/429), cache serialization, rate-limit interceptor, Redis-outage fallbacks, and the Lua token bucket
+against a real Redis (via Testcontainers). `AuthFlowIntegrationTest` starts the whole app over HTTP against
+real Postgres 17 + Redis containers (Flyway V1–V3) and covers `/users/{id}` access control (own 200, other 403,
+ADMIN 200), reuse detection committed despite the 401, logout, and two concurrent refreshes of the same token
+(exactly one succeeds, which proves the row lock). The container tests are **skipped automatically** if
 Docker isn't running, so make sure it is.
 
 ### 4.2 API smoke test (against the running app)
